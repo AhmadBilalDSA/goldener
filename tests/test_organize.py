@@ -439,14 +439,12 @@ class TestGoldClusterizedBatchSampler:
             ),
             ({"n_epochs": 0}, "n_epochs must be a positive integer"),
             ({"n_steps": 0}, "n_steps must be a positive integer"),
-            ({"n_epochs": 1}, "A generator is required"),
         ],
         ids=[
             "no_duration",
             "two_durations",
             "zero_epochs",
             "zero_steps",
-            "no_generator",
         ],
     )
     def test_get_sampling_details_failure(self, duration, match):

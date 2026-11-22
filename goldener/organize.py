@@ -9,7 +9,7 @@ there are more clusters than the batch size, every batch contains samples from d
 
 from enum import Enum
 from logging import getLogger
-from typing import Sequence
+from typing import Sequence, Any
 from typing import Iterator
 
 import torch
@@ -100,8 +100,11 @@ class GoldClusterizedBatchSampler(Sampler):
         shuffle: if True, the order of the samples of all clusters will be shuffled before sampling,
             the batch is shuffled to change the cluster order, and once exhausted a cluster is shuffled again.
             If False, the order of the samples and clusters will be preserved.
-        generator: optional generator to manage the random shuffling.
-            If None, a new generator will be created with a random seed.
+        generator: The generator managing the random shuffling. When no generator is provided
+            at construction, a generator seeded with 0 is created and used, so epochs are
+            reproducible. Its state can be inspected and restored through `state_dict` and
+            `load_state_dict`.
+        epoch: The current epoch, used to derive the generator for each `__iter__` call.
     """
 
     def __init__(
@@ -140,8 +143,18 @@ class GoldClusterizedBatchSampler(Sampler):
             strategy: strategy to apply when a cluster is exhausted. See ExhaustedClusterStrategy for more details.
         """
         self.shuffle = shuffle
-        self.generator = generator
 
+        self._base_seed: int | None
+        self._generator: torch.Generator | None
+        if generator is None:
+            self._base_seed = 0
+            self._generator = torch.Generator()
+            self._generator.manual_seed(self._base_seed)
+        else:
+            self._base_seed = None
+            self._generator = generator
+
+        self._epoch = 0
         self._batch_size = batch_size
         self._strategy = strategy
 
@@ -189,6 +202,100 @@ class GoldClusterizedBatchSampler(Sampler):
             raise ValueError(
                 "All the clusters are required to have the same size when `force_same_size=True`"
             )
+
+    @property
+    def generator(self) -> torch.Generator | None:
+        """The generator managing the random shuffling."""
+        return self._generator
+
+    @generator.setter
+    def generator(self, value: torch.Generator | None) -> None:
+        if value is None:
+            self._base_seed = 0
+            self._generator = torch.Generator()
+            self._generator.manual_seed(self._base_seed)
+        else:
+            self._base_seed = None
+            self._generator = value
+        self._epoch = 0
+
+    @property
+    def epoch(self) -> int:
+        """The current epoch, used to derive the generator for each iteration."""
+        return self._epoch
+
+    def set_epoch(self, epoch: int) -> None:
+        """Set the current epoch.
+
+        The epoch is used to derive the generator for subsequent iterations, so
+        iterating the sampler again starts back from the requested epoch.
+
+        Args:
+            epoch: Non-negative epoch number.
+
+        Raises:
+            ValueError: If `epoch` is not a non-negative integer.
+        """
+        if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+            raise ValueError("epoch must be a non-negative integer.")
+        self._epoch = epoch
+        if self._base_seed is not None:
+            self._generator = torch.Generator()
+            self._generator.manual_seed(self._base_seed + epoch)
+
+    def state_dict(self) -> dict[str, Any]:
+        """Return a snapshot of the sampler state.
+
+        The snapshot contains the epoch, the generator state, the cluster
+        assignments, and the sampling configuration, so the sampler can be
+        restored with `load_state_dict`.
+        """
+        generator_state = (
+            self._generator.get_state() if self._generator is not None else None
+        )
+        return {
+            "epoch": self._epoch,
+            "base_seed": self._base_seed,
+            "generator": generator_state,
+            "indices_per_cluster": self._indices_per_cluster,
+            "shuffle": self.shuffle,
+            "batch_size": self._batch_size,
+            "strategy": self._strategy,
+        }
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Restore the sampler state from a previous snapshot.
+
+        Args:
+            state_dict: State as returned by `state_dict`.
+
+        Raises:
+            ValueError: If `state_dict` is missing required keys.
+        """
+        required = {
+            "epoch",
+            "base_seed",
+            "generator",
+            "indices_per_cluster",
+            "shuffle",
+            "batch_size",
+            "strategy",
+        }
+        if not isinstance(state_dict, dict) or not required.issubset(state_dict):
+            raise ValueError("state_dict is missing required keys.")
+        self._epoch = int(state_dict["epoch"])
+        self._base_seed = state_dict["base_seed"]
+        gen_state = state_dict["generator"]
+        if gen_state is not None:
+            if self._generator is None:
+                self._generator = torch.Generator()
+            self._generator.set_state(gen_state)
+        else:
+            self._generator = None
+        self._indices_per_cluster = state_dict["indices_per_cluster"]
+        self.shuffle = state_dict["shuffle"]
+        self._batch_size = state_dict["batch_size"]
+        self._strategy = state_dict["strategy"]
 
     def get_sampling_details(
         self, n_epochs: int | None = None, n_steps: int | None = None
@@ -246,12 +353,12 @@ class GoldClusterizedBatchSampler(Sampler):
         }
 
     def __iter__(self) -> Iterator[list[int]]:
-        if self.generator is None:
-            seed = int(torch.empty((), dtype=torch.int64).random_().item())
-            generator = torch.Generator()
-            generator.manual_seed(seed)
-        else:
-            generator = self.generator
+        if self._generator is None:
+            self._base_seed = 0
+            self._generator = torch.Generator()
+            self._generator.manual_seed(self._base_seed)
+
+        generator = self._generator
 
         # order the indices of each cluster and initialize the tracking for the next index to sample for each cluster
         cluster_pools: dict[int, list[int]] = {}  # to set the ordering for each cluster
