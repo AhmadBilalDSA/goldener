@@ -223,9 +223,6 @@ reducer = GoldSKLearnReductionTool(PCA(n_components=2))
 x_reduced = reducer.fit_transform(x)  # shape: (50, 2)
 ```
 
-See [Reducing the dimensionality of embeddings](docs/posts/GOLD_REDUCTION.md)
-for the reduction API, fitting versus transforming new rows, and which estimators can map new vectors.
-
 ## Balancing batches during training
 
 When training with randomly sampled batches, the content distribution within each batch can vary a lot —
@@ -259,10 +256,7 @@ Use it to explore loss weighting or sampling policies that emphasize underrepres
 patterns, including variation within a class. Sparsity is a representation-based
 signal, not a calibrated measure of model difficulty or a guarantee of better generalization.
 
-See [Weighting training samples by embedding density](docs/posts/GOLD_DENSITY_WEIGHING.md)
-for a runnable example, the kNN scoring formula, training integration, and chunking
-and restart limitations. Raw scores are stored per vector; retrieval defaults to
-averaging by sample `idx`, then dividing by the maximum returned score.
+Raw scores are stored per vector; retrieval defaults to averaging by sample `idx`, then dividing by the maximum returned score.
 
 ```python
 from goldener import (
@@ -283,6 +277,11 @@ weigher = GoldDensityWeigher(table_path="my_table_for_weights")
 weighted = weigher.weigh_in_table(vectors)
 sample_weights = GoldDensityWeigher.get_weights_per_idx(weighted)
 ```
+
+## Further reading
+
+- [Reducing the dimensionality of embeddings](docs/posts/GOLD_REDUCTION.md) — the reduction API, fitting versus transforming new rows, and which estimators can map new vectors.
+- [Weighting training samples by embedding density](docs/posts/GOLD_DENSITY_WEIGHING.md) — a runnable example, the kNN scoring formula, training integration, and chunking and restart limitations.
 
 # Installation
 
